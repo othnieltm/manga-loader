@@ -5,7 +5,7 @@ type Chapter = {
   url: string
 }
 
-const API_BASE = 'http://localhost:3001'
+const API_BASE = ''
 const DEFAULT_SOURCE = 'https://tcbonepiecechapters.com/'
 
 const state: {
@@ -58,7 +58,7 @@ app.innerHTML = `
           <div class="source-control">
             <span class="source-label">SOURCE</span>
             <label class="sr-only" for="site-url">Source URL</label>
-            <input id="site-url" type="url" value="${DEFAULT_SOURCE}" aria-label="Site URL" />
+            <input id="site-url" type="url" value="${DEFAULT_SOURCE}" aria-label="TCB source URL" />
           </div>
           <div class="header-tools">
             <button id="load-latest" class="primary-button" type="button">
@@ -135,6 +135,10 @@ async function fetchJson<T>(path: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`)
 
   if (!response.ok) {
+    if (response.headers.get('content-type')?.includes('application/json')) {
+      const payload = await response.json() as { error?: string }
+      if (payload.error) throw new Error(payload.error)
+    }
     throw new Error(`Request failed with status ${response.status}`)
   }
 

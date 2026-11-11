@@ -1,8 +1,11 @@
 const http = require('http');
+const { once } = require('node:events');
 const { createPdf } = require('./pdf');
 
 const DEFAULT_SITE = 'https://tcbonepiecechapters.com/';
 const PORT = Number(process.env.PORT || 3001);
+const SOURCE_HOSTS = new Set(['tcbonepiecechapters.com', 'www.tcbonepiecechapters.com']);
+const IMAGE_HOSTS = new Set(['cdn.onepiecechapters.com']);
 
 function escapeHtml(value) {
   return value
@@ -13,18 +16,62 @@ function escapeHtml(value) {
     .replace(/'/g, '&#039;');
 }
 
+function isAllowedUrl(rawUrl, hosts) {
+  try {
+    const url = new URL(rawUrl);
+    return url.protocol === 'https:' &&
+      hosts.has(url.hostname) &&
+      !url.username &&
+      !url.password &&
+      (!url.port || url.port === '443');
+  } catch {
+    return false;
+  }
+}
+
+function isAllowedChapterUrl(rawUrl) {
+  if (!isAllowedUrl(rawUrl, SOURCE_HOSTS)) return false;
+  return new URL(rawUrl).pathname.startsWith('/chapters/');
+}
+
+async function fetchAllowedUrl(rawUrl, hosts, options = {}) {
+  let url = new URL(rawUrl);
+
+  for (let redirects = 0; redirects <= 5; redirects += 1) {
+    if (!isAllowedUrl(url.toString(), hosts)) {
+      throw new Error('The requested URL host is not supported.');
+    }
+
+    const response = await fetch(url, {
+      ...options,
+      redirect: 'manual',
+    });
+
+    if (response.status < 300 || response.status >= 400) {
+      if (!response.ok) {
+        throw new Error(`Request failed with status ${response.status}`);
+      }
+      return response;
+    }
+
+    const location = response.headers.get('location');
+    if (!location || redirects === 5) {
+      throw new Error('The source returned too many redirects.');
+    }
+    url = new URL(location, url);
+  }
+
+  throw new Error('The source returned too many redirects.');
+}
+
 function fetchDocument(rawUrl) {
-  return fetch(rawUrl, {
+  return fetchAllowedUrl(rawUrl, SOURCE_HOSTS, {
+    signal: AbortSignal.timeout(20000),
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     },
-  }).then((response) => {
-    if (!response.ok) {
-      throw new Error(`Request failed with status ${response.status}`);
-    }
-    return response.text();
-  });
+  }).then((response) => response.text());
 }
 
 function parseLatestChapters(html) {
@@ -69,14 +116,25 @@ function parseChapterPages(html) {
 function jsonResponse(res, payload, statusCode = 200) {
   res.writeHead(statusCode, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
   });
   res.end(JSON.stringify(payload));
 }
 
 function readJsonBody(req, maxBytes = 8192) {
+  if (req.body !== undefined) {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      if (Buffer.byteLength(JSON.stringify(body)) > maxBytes) {
+        return Promise.reject(requestError('Request body is too large.', 413));
+      }
+      return Promise.resolve(body);
+    } catch (error) {
+      return Promise.reject(error instanceof SyntaxError
+        ? requestError('Request body must be valid JSON.', 400)
+        : error);
+    }
+  }
+
   return new Promise((resolve, reject) => {
     let body = '';
     let exceededLimit = false;
@@ -88,28 +146,23 @@ function readJsonBody(req, maxBytes = 8192) {
     });
     req.on('end', () => {
       if (exceededLimit) {
-        reject(new Error('Request body is too large.'));
+        reject(requestError('Request body is too large.', 413));
         return;
       }
       try {
         resolve(JSON.parse(body));
       } catch {
-        reject(new Error('Request body must be valid JSON.'));
+        reject(requestError('Request body must be valid JSON.', 400));
       }
     });
     req.on('error', reject);
   });
 }
 
-function isAllowedChapterUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return url.protocol === 'https:' &&
-      ['tcbonepiecechapters.com', 'www.tcbonepiecechapters.com'].includes(url.hostname) &&
-      url.pathname.startsWith('/chapters/');
-  } catch {
-    return false;
-  }
+function requestError(message, statusCode) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function safeFilename(title) {
@@ -117,19 +170,30 @@ function safeFilename(title) {
   return `${slug || 'chapter'}.pdf`;
 }
 
-const server = http.createServer(async (req, res) => {
+async function writeBuffer(res, buffer) {
+  const chunkSize = 64 * 1024;
+  for (let offset = 0; offset < buffer.length; offset += chunkSize) {
+    if (!res.write(buffer.subarray(offset, offset + chunkSize))) {
+      await once(res, 'drain');
+    }
+  }
+  res.end();
+}
+
+async function handleRequest(req, res) {
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type',
-    });
+    res.writeHead(204);
     res.end();
     return;
   }
 
-  const url = new URL(req.url, 'http://localhost');
-  const siteUrl = url.searchParams.get('site') || DEFAULT_SITE;
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    jsonResponse(res, { error: 'Invalid request URL.' }, 400);
+    return;
+  }
 
   if (url.pathname === '/api/chapter.pdf') {
     if (req.method !== 'POST') {
@@ -139,8 +203,8 @@ const server = http.createServer(async (req, res) => {
 
     try {
       const body = await readJsonBody(req);
-      const chapterUrl = typeof body.chapterUrl === 'string' ? body.chapterUrl : '';
-      const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : '';
+      const chapterUrl = typeof body?.chapterUrl === 'string' ? body.chapterUrl : '';
+      const title = typeof body?.title === 'string' ? body.title.trim().slice(0, 200) : '';
       if (!isAllowedChapterUrl(chapterUrl)) {
         jsonResponse(res, { error: 'PDF export is only available for TCB chapter pages.' }, 400);
         return;
@@ -159,16 +223,13 @@ const server = http.createServer(async (req, res) => {
         const batch = pageUrls.slice(start, start + 4);
         const batchImages = await Promise.all(batch.map(async (pageUrl) => {
           const imageUrl = new URL(pageUrl);
-          if (imageUrl.protocol !== 'https:' || imageUrl.hostname !== 'cdn.onepiecechapters.com') {
+          if (!isAllowedUrl(imageUrl.toString(), IMAGE_HOSTS)) {
             throw new Error('Chapter page image host is not supported.');
           }
-          const imageResponse = await fetch(imageUrl, {
+          const imageResponse = await fetchAllowedUrl(imageUrl.toString(), IMAGE_HOSTS, {
             headers: { 'User-Agent': 'Mozilla/5.0 (compatible; MangaLoader/1.0)' },
-            signal: AbortSignal.timeout(60000),
+            signal: AbortSignal.timeout(10000),
           });
-          if (!imageResponse.ok) {
-            throw new Error(`Unable to download chapter page (HTTP ${imageResponse.status}).`);
-          }
           return Buffer.from(await imageResponse.arrayBuffer());
         }));
         totalBytes += batchImages.reduce((sum, image) => sum + image.length, 0);
@@ -184,12 +245,11 @@ const server = http.createServer(async (req, res) => {
         'Content-Type': 'application/pdf',
         'Content-Length': pdf.length,
         'Content-Disposition': `attachment; filename="${safeFilename(title || 'chapter')}"`,
-        'Access-Control-Allow-Origin': '*',
       });
-      res.end(pdf);
+      await writeBuffer(res, pdf);
     } catch (error) {
       if (!res.headersSent && !res.destroyed) {
-        jsonResponse(res, { error: error.message || 'Unable to create the chapter PDF.' }, 500);
+        jsonResponse(res, { error: error.message || 'Unable to create the chapter PDF.' }, error.statusCode || 500);
       }
     }
     return;
@@ -201,6 +261,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/latest') {
+    const siteUrl = url.searchParams.get('site') || DEFAULT_SITE;
+    if (!isAllowedUrl(siteUrl, SOURCE_HOSTS)) {
+      jsonResponse(res, { error: 'Only HTTPS TCB source URLs are supported.' }, 400);
+      return;
+    }
     try {
       const html = await fetchDocument(siteUrl);
       const chapters = parseLatestChapters(html);
@@ -212,7 +277,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/chapter') {
-    const chapterUrl = url.searchParams.get('url') || siteUrl;
+    const chapterUrl = url.searchParams.get('url') || '';
+    if (!isAllowedChapterUrl(chapterUrl)) {
+      jsonResponse(res, { error: 'Only TCB chapter pages are supported.' }, 400);
+      return;
+    }
 
     try {
       const html = await fetchDocument(chapterUrl);
@@ -229,8 +298,17 @@ const server = http.createServer(async (req, res) => {
 
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Not found');
-});
+}
 
-server.listen(PORT, () => {
-  console.log(`Manga loader backend running on http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  const server = http.createServer(handleRequest);
+  server.listen(PORT, () => {
+    console.log(`Manga loader backend running on http://localhost:${PORT}`);
+  });
+}
+
+module.exports = {
+  handleRequest,
+  isAllowedChapterUrl,
+  isAllowedUrl,
+};
