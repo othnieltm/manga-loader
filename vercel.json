@@ -3,7 +3,8 @@
   "services": {
     "backend": {
       "root": "backend",
-      "runtime": "node"
+      "runtime": "node",
+      "entrypoint": "api/index.mjs"
     },
     "frontend": {
       "root": "frontend",
