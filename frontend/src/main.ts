@@ -23,7 +23,7 @@ const state: {
   pages: [],
   isLoadingChapter: false,
   isExportingPdf: false,
-  readerMode: 'side-by-side',
+  readerMode: 'vertical',
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -74,7 +74,7 @@ app.innerHTML = `
         </div>
       </section>
 
-      <section id="archive-layout" class="layout" aria-label="Chapter archive and reader">
+      <section id="archive-layout" class="layout index-collapsed" aria-label="Chapter archive and reader">
         <aside id="chapter-index" class="sidebar panel">
           <div class="panel-header">
             <div>
@@ -93,7 +93,7 @@ app.innerHTML = `
         <section class="reader panel" aria-label="Selected chapter">
           <div class="reader-heading">
             <div class="reader-title">
-              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="true">
+              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="false">
                 <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
                 <span>Index</span>
               </button>
@@ -102,10 +102,10 @@ app.innerHTML = `
             <div class="reader-tools">
               <span class="reader-mode-label">READER MODE</span>
               <div class="reader-mode-control" role="group" aria-label="Reader mode">
-                <button class="reader-mode-button active" type="button" data-reader-mode="side-by-side" aria-pressed="true">
+                <button class="reader-mode-button" type="button" data-reader-mode="side-by-side" aria-pressed="false">
                   Side by side
                 </button>
-                <button class="reader-mode-button" type="button" data-reader-mode="vertical" aria-pressed="false">
+                <button class="reader-mode-button active" type="button" data-reader-mode="vertical" aria-pressed="true">
                   Vertical stream
                 </button>
               </div>
@@ -142,7 +142,7 @@ const indexToggle = document.querySelector<HTMLButtonElement>('#index-toggle')!
 
 let isLoadingNewest = false
 let chapterRequestId = 0
-let isIndexCollapsed = false
+let isIndexCollapsed = true
 
 function escapeHtml(value: string) {
   return value
