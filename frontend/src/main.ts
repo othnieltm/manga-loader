@@ -15,6 +15,7 @@ const state: {
   pages: string[]
   isLoadingChapter: boolean
   isExportingPdf: boolean
+  readerMode: 'side-by-side' | 'vertical'
 } = {
   chapters: [],
   selectedUrl: null,
@@ -22,6 +23,7 @@ const state: {
   pages: [],
   isLoadingChapter: false,
   isExportingPdf: false,
+  readerMode: 'side-by-side',
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -72,8 +74,8 @@ app.innerHTML = `
         </div>
       </section>
 
-      <section class="layout" aria-label="Chapter archive and reader">
-        <aside class="sidebar panel">
+      <section id="archive-layout" class="layout" aria-label="Chapter archive and reader">
+        <aside id="chapter-index" class="sidebar panel">
           <div class="panel-header">
             <div>
               <p class="section-kicker">01 / THE INDEX</p>
@@ -90,8 +92,24 @@ app.innerHTML = `
 
         <section class="reader panel" aria-label="Selected chapter">
           <div class="reader-heading">
-            <p class="section-kicker">02 / THE READER</p>
-            <span class="reader-note">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span>
+            <div class="reader-title">
+              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="true">
+                <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+                <span>Index</span>
+              </button>
+              <p class="section-kicker">02 / THE READER</p>
+            </div>
+            <div class="reader-tools">
+              <span class="reader-mode-label">READER MODE</span>
+              <div class="reader-mode-control" role="group" aria-label="Reader mode">
+                <button class="reader-mode-button active" type="button" data-reader-mode="side-by-side" aria-pressed="true">
+                  Side by side
+                </button>
+                <button class="reader-mode-button" type="button" data-reader-mode="vertical" aria-pressed="false">
+                  Vertical stream
+                </button>
+              </div>
+            </div>
           </div>
           <div id="chapter-details" class="chapter-details empty">
             <div class="empty-mark" aria-hidden="true">P/</div>
@@ -118,9 +136,13 @@ const siteUrlInput = document.querySelector<HTMLInputElement>('#site-url')!
 const loadLatestButton = document.querySelector<HTMLButtonElement>('#load-latest')!
 const downloadPdfButton = document.querySelector<HTMLButtonElement>('#download-pdf')!
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!
+const readerModeButtons = document.querySelectorAll<HTMLButtonElement>('[data-reader-mode]')
+const archiveLayout = document.querySelector<HTMLElement>('#archive-layout')!
+const indexToggle = document.querySelector<HTMLButtonElement>('#index-toggle')!
 
 let isLoadingNewest = false
 let chapterRequestId = 0
+let isIndexCollapsed = false
 
 function escapeHtml(value: string) {
   return value
@@ -193,6 +215,7 @@ function updatePdfButton() {
 
 function renderPages() {
   pageGrid.innerHTML = ''
+  pageGrid.className = `page-grid mode-${state.readerMode}`
 
   if (!state.pages.length) {
     pageGrid.innerHTML = '<p class="empty-pages">No pages available.</p>'
@@ -232,6 +255,16 @@ function renderPages() {
     card.append(image, caption, actions)
     pageGrid.append(card)
   }
+}
+
+function setReaderMode(mode: 'side-by-side' | 'vertical') {
+  state.readerMode = mode
+  readerModeButtons.forEach((button) => {
+    const isActive = button.dataset.readerMode === mode
+    button.classList.toggle('active', isActive)
+    button.setAttribute('aria-pressed', String(isActive))
+  })
+  renderPages()
 }
 
 async function loadLatestChapters() {
@@ -366,6 +399,22 @@ loadLatestButton.addEventListener('click', () => {
 
 downloadPdfButton.addEventListener('click', () => {
   void downloadChapterPdf()
+})
+
+indexToggle.addEventListener('click', () => {
+  isIndexCollapsed = !isIndexCollapsed
+  archiveLayout.classList.toggle('index-collapsed', isIndexCollapsed)
+  indexToggle.setAttribute('aria-expanded', String(!isIndexCollapsed))
+  indexToggle.setAttribute('aria-label', `${isIndexCollapsed ? 'Show' : 'Hide'} chapter index`)
+})
+
+readerModeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const mode = button.dataset.readerMode
+    if (mode === 'side-by-side' || mode === 'vertical') {
+      setReaderMode(mode)
+    }
+  })
 })
 
 siteUrlInput.addEventListener('keydown', (event) => {
