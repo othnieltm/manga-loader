@@ -194,7 +194,8 @@ function getChapterLabel(chapter: Chapter) {
 
 function renderChapterSelector(selectedChapter: Chapter | undefined) {
   const isKagurabachi = selectedChapter?.series === 'kagurabachi'
-  const latestNumber = selectedChapter ? Number(getChapterNumber(selectedChapter)) : 0
+  const latestOnePieceChapter = state.chapters.find((chapter) => chapter.series === 'one-piece')
+  const latestNumber = latestOnePieceChapter ? Number(getChapterNumber(latestOnePieceChapter)) : 0
   chapterNumberInput.innerHTML = '<option value="">Select a chapter</option>'
   chapterNumberInput.disabled = isKagurabachi
     ? state.kagurabachiChapters.length === 0
