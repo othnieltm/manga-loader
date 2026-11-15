@@ -1,6 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { handleRequest, isAllowedChapterUrl, isAllowedUrl } = require('./server');
+const {
+  handleRequest,
+  isAllowedChapterUrl,
+  isAllowedUrl,
+  isValidChapterNumber,
+  parseMangaChapters,
+} = require('./server');
 
 function createResponse() {
   return {
@@ -31,6 +37,24 @@ test('allows only supported chapter URLs', () => {
   assert.equal(isAllowedChapterUrl('https://tcbonepiecechapters.com/chapters/chapter-1'), true);
   assert.equal(isAllowedChapterUrl('https://tcbonepiecechapters.com/'), false);
   assert.equal(isAllowedChapterUrl('https://example.test/chapters/chapter-1'), false);
+});
+
+test('validates chapter numbers and parses manga archive entries', () => {
+  assert.equal(isValidChapterNumber('1197'), true);
+  assert.equal(isValidChapterNumber('892.5'), true);
+  assert.equal(isValidChapterNumber('chapter-1197'), false);
+  assert.deepEqual(parseMangaChapters(
+    '<a href="/chapters/1/one-piece-chapter-1197">One Piece <b>Chapter 1197</b></a>',
+  ), [{
+    title: 'One Piece Chapter 1197',
+    url: 'https://tcbonepiecechapters.com/chapters/1/one-piece-chapter-1197',
+  }]);
+  assert.deepEqual(parseMangaChapters(
+    "<a href='/chapters/2/one-piece-chapter-892-review-1688718750'></a>",
+  ), [{
+    title: 'one piece chapter 892 review 1688718750',
+    url: 'https://tcbonepiecechapters.com/chapters/2/one-piece-chapter-892-review-1688718750',
+  }]);
 });
 
 test('rejects unsupported latest and chapter URLs without fetching', async () => {

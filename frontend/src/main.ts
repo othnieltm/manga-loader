@@ -74,7 +74,7 @@ app.innerHTML = `
         </div>
       </section>
 
-      <section id="archive-layout" class="layout index-collapsed" aria-label="Chapter archive and reader">
+      <section id="archive-layout" class="layout" aria-label="Chapter archive and reader">
         <aside id="chapter-index" class="sidebar panel">
           <div class="panel-header">
             <div>
@@ -83,6 +83,15 @@ app.innerHTML = `
             </div>
             <span id="chapter-count" class="count-pill">0</span>
           </div>
+          <form id="chapter-lookup" class="chapter-lookup">
+            <label for="chapter-number">READ A CHAPTER</label>
+            <div class="chapter-lookup-row">
+              <select id="chapter-number" name="chapter" disabled>
+                <option value="">Load chapters first</option>
+              </select>
+            </div>
+            <p id="chapter-lookup-status" class="chapter-lookup-status" role="status" aria-live="polite"></p>
+          </form>
           <ul id="chapter-list" class="chapter-list"></ul>
           <div class="sidebar-foot">
             <span class="status-dot" aria-hidden="true"></span>
@@ -93,7 +102,7 @@ app.innerHTML = `
         <section class="reader panel" aria-label="Selected chapter">
           <div class="reader-heading">
             <div class="reader-title">
-              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="false">
+              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="true">
                 <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
                 <span>Index</span>
               </button>
@@ -139,10 +148,13 @@ const exportStatus = document.querySelector<HTMLParagraphElement>('#export-statu
 const readerModeButtons = document.querySelectorAll<HTMLButtonElement>('[data-reader-mode]')
 const archiveLayout = document.querySelector<HTMLElement>('#archive-layout')!
 const indexToggle = document.querySelector<HTMLButtonElement>('#index-toggle')!
+const chapterLookup = document.querySelector<HTMLFormElement>('#chapter-lookup')!
+const chapterNumberInput = document.querySelector<HTMLSelectElement>('#chapter-number')!
+const chapterLookupStatus = document.querySelector<HTMLParagraphElement>('#chapter-lookup-status')!
 
 let isLoadingNewest = false
 let chapterRequestId = 0
-let isIndexCollapsed = true
+let isIndexCollapsed = false
 
 function escapeHtml(value: string) {
   return value
@@ -165,6 +177,29 @@ async function fetchJson<T>(path: string): Promise<T> {
   }
 
   return (await response.json()) as T
+}
+
+function getChapterNumber(chapter: Chapter) {
+  const match = chapter.url.match(/chapter-(\d+(?:\.\d+)?)(?:-|$)/i)
+  return match?.[1] ?? ''
+}
+
+function renderChapterSelector(latestChapter: Chapter | undefined) {
+  const latestNumber = latestChapter ? Number(getChapterNumber(latestChapter)) : 0
+  chapterNumberInput.innerHTML = '<option value="">Select a chapter</option>'
+  chapterNumberInput.disabled = latestNumber < 1
+
+  if (latestNumber < 1) {
+    chapterNumberInput.innerHTML = '<option value="">No chapters available</option>'
+    return
+  }
+
+  for (let number = latestNumber; number >= 1; number -= 1) {
+    const option = document.createElement('option')
+    option.value = String(number)
+    option.textContent = `Chapter ${number}`
+    chapterNumberInput.append(option)
+  }
 }
 
 function renderChapterList() {
@@ -283,6 +318,7 @@ async function loadLatestChapters() {
     const payload = await fetchJson<{ chapters: Chapter[]; source: string }>(`/api/latest?site=${encodeURIComponent(site)}`)
     state.chapters = payload.chapters
     state.selectedUrl = payload.chapters[0]?.url ?? null
+    renderChapterSelector(payload.chapters[0])
 
     if (state.chapters.length) {
       await selectChapter(state.chapters[0])
@@ -294,6 +330,7 @@ async function loadLatestChapters() {
       chapterDetails.classList.add('empty')
       chapterDetails.innerHTML = '<p>No chapters were found for this source.</p>'
       state.pages = []
+      renderChapterSelector(undefined)
       updatePdfButton()
       renderPages()
     }
@@ -322,6 +359,10 @@ async function selectChapter(chapter: Chapter) {
   const requestId = ++chapterRequestId
   state.selectedUrl = chapter.url
   state.selectedTitle = chapter.title
+  const chapterNumber = getChapterNumber(chapter)
+  if (chapterNumber) {
+    chapterNumberInput.value = chapterNumber
+  }
   state.pages = []
   state.isLoadingChapter = true
   exportStatus.textContent = ''
@@ -347,6 +388,22 @@ async function selectChapter(chapter: Chapter) {
     chapterDetails.innerHTML += `<p class="error-message">${escapeHtml((error as Error).message || 'Unable to load pages.')}</p>`
     renderPages()
     updatePdfButton()
+  }
+}
+
+async function lookupChapter(number: string) {
+  chapterLookupStatus.textContent = 'Finding chapter...'
+  chapterLookupStatus.className = 'chapter-lookup-status'
+
+  try {
+    const payload = await fetchJson<{ chapter: Chapter }>(
+      `/api/chapter-lookup?number=${encodeURIComponent(number)}`,
+    )
+    chapterLookupStatus.textContent = ''
+    await selectChapter(payload.chapter)
+  } catch (error) {
+    chapterLookupStatus.textContent = (error as Error).message || 'Unable to find that chapter.'
+    chapterLookupStatus.className = 'chapter-lookup-status error-message'
   }
 }
 
@@ -421,6 +478,19 @@ siteUrlInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault()
     void loadLatestChapters()
+  }
+})
+
+chapterLookup.addEventListener('submit', (event) => {
+  event.preventDefault()
+  if (chapterNumberInput.value) {
+    void lookupChapter(chapterNumberInput.value)
+  }
+})
+
+chapterNumberInput.addEventListener('change', () => {
+  if (chapterNumberInput.value) {
+    void lookupChapter(chapterNumberInput.value)
   }
 })
 

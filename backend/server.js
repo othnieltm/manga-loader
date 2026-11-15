@@ -6,6 +6,7 @@ const DEFAULT_SITE = 'https://tcbonepiecechapters.com/';
 const PORT = Number(process.env.PORT || 3001);
 const SOURCE_HOSTS = new Set(['tcbonepiecechapters.com', 'www.tcbonepiecechapters.com']);
 const IMAGE_HOSTS = new Set(['cdn.onepiecechapters.com']);
+const ONE_PIECE_ARCHIVE = new URL('/mangas/5/one-piece', DEFAULT_SITE).toString();
 
 function escapeHtml(value) {
   return value
@@ -101,7 +102,47 @@ function parseLatestChapters(html) {
     });
   }
 
-  return Array.from(chapterEntries.values()).slice(0, 20);
+  return Array.from(chapterEntries.values());
+}
+
+function parseMangaChapters(html) {
+  const chapterRegex = /<a[^>]*href=(["'])(\/chapters\/[^"']+)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  const chapters = [];
+
+  for (const match of html.matchAll(chapterRegex)) {
+    const [, , href, innerHtml] = match;
+    const text = innerHtml
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const url = new URL(href, DEFAULT_SITE).toString();
+    const title = text || decodeURIComponent(new URL(url).pathname.split('/').pop() || 'Chapter')
+      .replace(/-/g, ' ')
+      .trim();
+
+    if (href && !chapters.some((chapter) => chapter.url === url)) {
+      chapters.push({
+        title,
+        url,
+      });
+    }
+  }
+
+  return chapters;
+}
+
+function isValidChapterNumber(value) {
+  return /^\d+(?:\.\d+)?$/.test(value);
+}
+
+async function findMangaChapter(number) {
+  const html = await fetchDocument(ONE_PIECE_ARCHIVE);
+  const chapters = parseMangaChapters(html);
+  const chapterPattern = new RegExp(`(?:^|-)chapter-${number.replace('.', '\\.')}(?:-|$)`, 'i');
+  return chapters.find((chapter) => chapterPattern.test(new URL(chapter.url).pathname));
 }
 
 function parseChapterPages(html) {
@@ -296,6 +337,26 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (url.pathname === '/api/chapter-lookup') {
+    const number = (url.searchParams.get('number') || '').trim();
+    if (!isValidChapterNumber(number)) {
+      jsonResponse(res, { error: 'Enter a valid chapter number, such as 1197 or 892.' }, 400);
+      return;
+    }
+
+    try {
+      const chapter = await findMangaChapter(number);
+      if (!chapter) {
+        jsonResponse(res, { error: `One Piece chapter ${number} was not found.` }, 404);
+        return;
+      }
+      jsonResponse(res, { chapter });
+    } catch (error) {
+      jsonResponse(res, { error: error.message || 'Unable to find that chapter.' }, 500);
+    }
+    return;
+  }
+
   res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Not found');
 }
@@ -309,6 +370,8 @@ if (require.main === module) {
 
 module.exports = {
   handleRequest,
+  isValidChapterNumber,
   isAllowedChapterUrl,
   isAllowedUrl,
+  parseMangaChapters,
 };

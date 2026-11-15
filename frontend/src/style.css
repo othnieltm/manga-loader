@@ -406,6 +406,55 @@ h1 span {
   scrollbar-width: thin;
 }
 
+.chapter-lookup {
+  margin-bottom: 20px;
+  padding-bottom: 18px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.chapter-lookup label {
+  display: block;
+  margin-bottom: 9px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.11em;
+}
+
+.chapter-lookup-row {
+  display: flex;
+  gap: 7px;
+}
+
+.chapter-lookup select {
+  width: 100%;
+  min-width: 0;
+  height: 39px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.025);
+  color: #e8e1ef;
+  cursor: pointer;
+}
+
+.chapter-lookup select:disabled {
+  cursor: wait;
+  opacity: 0.55;
+}
+
+.chapter-lookup-status {
+  min-height: 1.1em;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.chapter-lookup-status:empty {
+  display: none;
+}
+
 .chapter-list li {
   min-width: 0;
 }
