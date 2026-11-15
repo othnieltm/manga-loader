@@ -3,9 +3,15 @@ const { once } = require('node:events');
 const { createPdf } = require('./pdf');
 
 const DEFAULT_SITE = 'https://tcbonepiecechapters.com/';
+const KAGURABACHI_SITE = 'https://readkagura.com/';
 const PORT = Number(process.env.PORT || 3001);
-const SOURCE_HOSTS = new Set(['tcbonepiecechapters.com', 'www.tcbonepiecechapters.com']);
-const IMAGE_HOSTS = new Set(['cdn.onepiecechapters.com']);
+const SOURCE_HOSTS = new Set([
+  'tcbonepiecechapters.com',
+  'www.tcbonepiecechapters.com',
+  'readkagura.com',
+  'www.readkagura.com',
+]);
+const IMAGE_HOSTS = new Set(['cdn.onepiecechapters.com', 'blogger.googleusercontent.com']);
 const ONE_PIECE_ARCHIVE = new URL('/mangas/5/one-piece', DEFAULT_SITE).toString();
 
 function escapeHtml(value) {
@@ -15,6 +21,40 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function chapterTitleFromUrl(rawUrl) {
+  const pathname = new URL(rawUrl).pathname;
+  const slug = pathname.split('/').filter(Boolean).pop() || 'chapter';
+  return decodeURIComponent(slug).replace(/-/g, ' ').trim();
+}
+
+function parseKagurabachiChapters(html) {
+  const chapterRegex = /<a[^>]*href=(["'])(?:https?:\/\/(?:www\.)?readkagura\.com)?(\/manga\/kagurabachi-chapter-[^"']+\/?)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  const chapters = [];
+
+  for (const match of html.matchAll(chapterRegex)) {
+    const [, , href, innerHtml] = match;
+    const url = new URL(href, KAGURABACHI_SITE).toString();
+    const text = innerHtml
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&#39;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&#8211;|&ndash;/g, '-')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const title = text || decodeURIComponent(new URL(url).pathname.split('/').filter(Boolean).pop() || 'Chapter')
+      .replace(/-/g, ' ')
+      .trim();
+
+    if (!chapters.some((chapter) => chapter.url === url)) {
+      chapters.push({ title, url });
+    }
+  }
+
+  return chapters;
 }
 
 function isAllowedUrl(rawUrl, hosts) {
@@ -32,7 +72,9 @@ function isAllowedUrl(rawUrl, hosts) {
 
 function isAllowedChapterUrl(rawUrl) {
   if (!isAllowedUrl(rawUrl, SOURCE_HOSTS)) return false;
-  return new URL(rawUrl).pathname.startsWith('/chapters/');
+  const url = new URL(rawUrl);
+  return (url.hostname.endsWith('tcbonepiecechapters.com') && url.pathname.startsWith('/chapters/')) ||
+    (url.hostname.endsWith('readkagura.com') && /^\/manga\/kagurabachi-chapter-[^/]+\/?$/.test(url.pathname));
 }
 
 async function fetchAllowedUrl(rawUrl, hosts, options = {}) {
@@ -65,8 +107,8 @@ async function fetchAllowedUrl(rawUrl, hosts, options = {}) {
   throw new Error('The source returned too many redirects.');
 }
 
-function fetchDocument(rawUrl) {
-  return fetchAllowedUrl(rawUrl, SOURCE_HOSTS, {
+function fetchDocument(rawUrl, hosts = SOURCE_HOSTS) {
+  return fetchAllowedUrl(rawUrl, hosts, {
     signal: AbortSignal.timeout(20000),
     headers: {
       'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
@@ -146,10 +188,18 @@ async function findMangaChapter(number) {
 }
 
 function parseChapterPages(html) {
-  const matches = [...html.matchAll(/https?:\/\/cdn\.onepiecechapters\.com\/file\/[^\s"'<>]+/gi)];
+  const matches = [...html.matchAll(/https?:\/\/[^\s"'<>]+/gi)];
   const pages = matches
     .map((match) => match[0])
-    .filter((page) => page.includes('.png') || page.includes('.jpg') || page.includes('.jpeg') || page.includes('.webp'));
+    .filter((page) => {
+      try {
+        const url = new URL(page);
+        return IMAGE_HOSTS.has(url.hostname) &&
+          /\.(?:png|jpe?g|webp)(?:[?#]|$)/i.test(url.pathname);
+      } catch {
+        return false;
+      }
+    });
 
   return [...new Set(pages)];
 }
@@ -247,11 +297,14 @@ async function handleRequest(req, res) {
       const chapterUrl = typeof body?.chapterUrl === 'string' ? body.chapterUrl : '';
       const title = typeof body?.title === 'string' ? body.title.trim().slice(0, 200) : '';
       if (!isAllowedChapterUrl(chapterUrl)) {
-        jsonResponse(res, { error: 'PDF export is only available for TCB chapter pages.' }, 400);
+        jsonResponse(res, { error: 'PDF export is only available for supported manga chapter pages.' }, 400);
         return;
       }
 
-      const chapterHtml = await fetchDocument(chapterUrl);
+      const chapterHost = new URL(chapterUrl).hostname.endsWith('readkagura.com')
+        ? new Set(['readkagura.com', 'www.readkagura.com'])
+        : SOURCE_HOSTS;
+      const chapterHtml = await fetchDocument(chapterUrl, chapterHost);
       const pageUrls = parseChapterPages(chapterHtml);
       if (!pageUrls.length || pageUrls.length > 80) {
         jsonResponse(res, { error: 'This chapter must contain between 1 and 80 pages to export.' }, 422);
@@ -317,18 +370,32 @@ async function handleRequest(req, res) {
     return;
   }
 
+  if (url.pathname === '/api/kagurabachi') {
+    try {
+      const html = await fetchDocument(KAGURABACHI_SITE);
+      const chapters = parseKagurabachiChapters(html);
+      jsonResponse(res, { chapters, source: KAGURABACHI_SITE });
+    } catch (error) {
+      jsonResponse(res, { error: error.message || 'Unable to load Kagurabachi chapters.' }, 500);
+    }
+    return;
+  }
+
   if (url.pathname === '/api/chapter') {
     const chapterUrl = url.searchParams.get('url') || '';
     if (!isAllowedChapterUrl(chapterUrl)) {
-      jsonResponse(res, { error: 'Only TCB chapter pages are supported.' }, 400);
+      jsonResponse(res, { error: 'Only supported manga chapter pages are allowed.' }, 400);
       return;
     }
 
     try {
-      const html = await fetchDocument(chapterUrl);
+      const chapterHost = new URL(chapterUrl).hostname.endsWith('readkagura.com')
+        ? new Set(['readkagura.com', 'www.readkagura.com'])
+        : SOURCE_HOSTS;
+      const html = await fetchDocument(chapterUrl, chapterHost);
       const pages = parseChapterPages(html);
       jsonResponse(res, {
-        title: escapeHtml(chapterUrl.split('/').pop().replace(/-/g, ' ') || 'Chapter'),
+        title: escapeHtml(chapterTitleFromUrl(chapterUrl)),
         pages,
       });
     } catch (error) {
@@ -369,9 +436,12 @@ if (require.main === module) {
 }
 
 module.exports = {
+  chapterTitleFromUrl,
   handleRequest,
   isValidChapterNumber,
   isAllowedChapterUrl,
   isAllowedUrl,
+  parseChapterPages,
+  parseKagurabachiChapters,
   parseMangaChapters,
 };

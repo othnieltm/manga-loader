@@ -5,6 +5,9 @@ const {
   isAllowedChapterUrl,
   isAllowedUrl,
   isValidChapterNumber,
+  chapterTitleFromUrl,
+  parseChapterPages,
+  parseKagurabachiChapters,
   parseMangaChapters,
 } = require('./server');
 
@@ -35,8 +38,16 @@ test('allows only HTTPS URLs on the supported source hosts', () => {
 
 test('allows only supported chapter URLs', () => {
   assert.equal(isAllowedChapterUrl('https://tcbonepiecechapters.com/chapters/chapter-1'), true);
+  assert.equal(isAllowedChapterUrl('https://readkagura.com/manga/kagurabachi-chapter-139/'), true);
   assert.equal(isAllowedChapterUrl('https://tcbonepiecechapters.com/'), false);
   assert.equal(isAllowedChapterUrl('https://example.test/chapters/chapter-1'), false);
+});
+
+test('extracts readable titles from chapter URLs with trailing slashes', () => {
+  assert.equal(
+    chapterTitleFromUrl('https://readkagura.com/manga/kagurabachi-chapter-139/'),
+    'kagurabachi chapter 139',
+  );
 });
 
 test('validates chapter numbers and parses manga archive entries', () => {
@@ -55,6 +66,15 @@ test('validates chapter numbers and parses manga archive entries', () => {
     title: 'one piece chapter 892 review 1688718750',
     url: 'https://tcbonepiecechapters.com/chapters/2/one-piece-chapter-892-review-1688718750',
   }]);
+  assert.deepEqual(parseKagurabachiChapters(
+    '<a href="/manga/kagurabachi-chapter-139/">Kagurabachi Chapter 139</a>',
+  ), [{
+    title: 'Kagurabachi Chapter 139',
+    url: 'https://readkagura.com/manga/kagurabachi-chapter-139/',
+  }]);
+  assert.deepEqual(parseChapterPages(
+    '<img src="https://blogger.googleusercontent.com/img/a/001.jpg"><img src="https://example.test/logo.png">',
+  ), ['https://blogger.googleusercontent.com/img/a/001.jpg']);
 });
 
 test('rejects unsupported latest and chapter URLs without fetching', async () => {

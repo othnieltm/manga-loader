@@ -3,6 +3,7 @@ import './style.css'
 type Chapter = {
   title: string
   url: string
+  series?: 'one-piece' | 'kagurabachi'
 }
 
 const API_BASE = ''
@@ -10,6 +11,7 @@ const DEFAULT_SOURCE = 'https://tcbonepiecechapters.com/'
 
 const state: {
   chapters: Chapter[]
+  kagurabachiChapters: Chapter[]
   selectedUrl: string | null
   selectedTitle: string | null
   pages: string[]
@@ -18,6 +20,7 @@ const state: {
   readerMode: 'side-by-side' | 'vertical'
 } = {
   chapters: [],
+  kagurabachiChapters: [],
   selectedUrl: null,
   selectedTitle: null,
   pages: [],
@@ -180,14 +183,32 @@ async function fetchJson<T>(path: string): Promise<T> {
 }
 
 function getChapterNumber(chapter: Chapter) {
-  const match = chapter.url.match(/chapter-(\d+(?:\.\d+)?)(?:-|$)/i)
+  const match = chapter.url.match(/chapter-(\d+(?:\.\d+)?)(?:-|\/|$)/i)
   return match?.[1] ?? ''
 }
 
-function renderChapterSelector(latestChapter: Chapter | undefined) {
-  const latestNumber = latestChapter ? Number(getChapterNumber(latestChapter)) : 0
+function getChapterLabel(chapter: Chapter) {
+  const number = getChapterNumber(chapter)
+  return number ? `Chapter ${number}` : chapter.title
+}
+
+function renderChapterSelector(selectedChapter: Chapter | undefined) {
+  const isKagurabachi = selectedChapter?.series === 'kagurabachi'
+  const latestNumber = selectedChapter ? Number(getChapterNumber(selectedChapter)) : 0
   chapterNumberInput.innerHTML = '<option value="">Select a chapter</option>'
-  chapterNumberInput.disabled = latestNumber < 1
+  chapterNumberInput.disabled = isKagurabachi
+    ? state.kagurabachiChapters.length === 0
+    : latestNumber < 1
+
+  if (isKagurabachi) {
+    for (const chapter of state.kagurabachiChapters) {
+      const option = document.createElement('option')
+      option.value = chapter.url
+      option.textContent = getChapterLabel(chapter)
+      chapterNumberInput.append(option)
+    }
+    return
+  }
 
   if (latestNumber < 1) {
     chapterNumberInput.innerHTML = '<option value="">No chapters available</option>'
@@ -316,12 +337,28 @@ async function loadLatestChapters() {
 
   try {
     const payload = await fetchJson<{ chapters: Chapter[]; source: string }>(`/api/latest?site=${encodeURIComponent(site)}`)
-    state.chapters = payload.chapters
-    state.selectedUrl = payload.chapters[0]?.url ?? null
-    renderChapterSelector(payload.chapters[0])
+    let kagurabachiChapters: Chapter[] = []
+    try {
+      const kaguraPayload = await fetchJson<{ chapters: Chapter[]; source: string }>('/api/kagurabachi')
+      kagurabachiChapters = kaguraPayload.chapters.map((chapter) => ({ ...chapter, series: 'kagurabachi' }))
+    } catch (error) {
+      chapterLookupStatus.textContent = `Kagurabachi unavailable: ${(error as Error).message || 'Unable to load chapters.'}`
+      chapterLookupStatus.className = 'chapter-lookup-status error-message'
+    }
+
+    const onePieceChapters = payload.chapters.map((chapter) => ({ ...chapter, series: 'one-piece' as const }))
+    state.kagurabachiChapters = kagurabachiChapters
+    const kagurabachiEntry = kagurabachiChapters[0]
+      ? { ...kagurabachiChapters[0], title: 'Kagurabachi' }
+      : null
+    state.chapters = kagurabachiEntry
+      ? [kagurabachiEntry, ...onePieceChapters]
+      : onePieceChapters
+    state.selectedUrl = state.chapters[0]?.url ?? null
+    renderChapterSelector(state.chapters[0])
 
     if (state.chapters.length) {
-      await selectChapter(state.chapters[0])
+      await selectChapter(state.chapters[0], true)
     } else {
       chapterRequestId += 1
       state.selectedUrl = null
@@ -341,10 +378,12 @@ async function loadLatestChapters() {
     chapterDetails.classList.add('empty')
     chapterDetails.innerHTML = `<p>${escapeHtml((error as Error).message || 'Unable to load chapters.')}</p>`
     state.chapters = []
+    state.kagurabachiChapters = []
     state.selectedUrl = null
     state.selectedTitle = null
     state.isLoadingChapter = false
     state.pages = []
+    renderChapterSelector(undefined)
     updatePdfButton()
     renderPages()
     renderChapterList()
@@ -355,13 +394,15 @@ async function loadLatestChapters() {
   }
 }
 
-async function selectChapter(chapter: Chapter) {
+async function selectChapter(chapter: Chapter, updateSelector = true) {
   const requestId = ++chapterRequestId
   state.selectedUrl = chapter.url
   state.selectedTitle = chapter.title
-  const chapterNumber = getChapterNumber(chapter)
-  if (chapterNumber) {
-    chapterNumberInput.value = chapterNumber
+  if (updateSelector) {
+    renderChapterSelector(chapter)
+    chapterNumberInput.value = chapter.series === 'kagurabachi'
+      ? chapter.url
+      : getChapterNumber(chapter)
   }
   state.pages = []
   state.isLoadingChapter = true
@@ -484,12 +525,15 @@ siteUrlInput.addEventListener('keydown', (event) => {
 chapterLookup.addEventListener('submit', (event) => {
   event.preventDefault()
   if (chapterNumberInput.value) {
-    void lookupChapter(chapterNumberInput.value)
+    chapterNumberInput.dispatchEvent(new Event('change'))
   }
 })
 
 chapterNumberInput.addEventListener('change', () => {
-  if (chapterNumberInput.value) {
+  if (chapterNumberInput.value.startsWith('https://readkagura.com/')) {
+    const chapter = state.kagurabachiChapters.find((item) => item.url === chapterNumberInput.value)
+    if (chapter) void selectChapter(chapter, false)
+  } else if (chapterNumberInput.value) {
     void lookupChapter(chapterNumberInput.value)
   }
 })

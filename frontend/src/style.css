@@ -430,13 +430,33 @@ h1 span {
 .chapter-lookup select {
   width: 100%;
   min-width: 0;
-  height: 39px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
+  height: 43px;
+  padding: 0 34px 0 12px;
+  border: 1px solid rgba(182, 144, 255, 0.35);
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.025);
-  color: #e8e1ef;
+  background-color: rgba(182, 144, 255, 0.08);
+  color: #f0eafa;
+  font-family: var(--mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.02em;
   cursor: pointer;
+}
+
+.chapter-lookup select:hover,
+.chapter-lookup select:focus {
+  border-color: var(--violet-bright);
+  background-color: rgba(182, 144, 255, 0.14);
+}
+
+.chapter-lookup select:focus {
+  outline: 2px solid rgba(197, 165, 255, 0.35);
+  outline-offset: 2px;
+}
+
+.chapter-lookup option {
+  background: var(--panel-raised);
+  color: #f0eafa;
+  font-family: var(--mono);
 }
 
 .chapter-lookup select:disabled {
