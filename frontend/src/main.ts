@@ -91,7 +91,12 @@ app.innerHTML = `
         <section class="reader panel" aria-label="Selected chapter">
           <div class="reader-heading">
             <p class="section-kicker">02 / THE READER</p>
-            <span class="reader-note">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span>
+            <div class="reader-heading-actions">
+              <span class="reader-note">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span>
+              <button id="open-fullscreen-reader" class="fullscreen-reader-button" type="button" disabled>
+                Fullscreen
+              </button>
+            </div>
           </div>
           <div id="chapter-details" class="chapter-details empty">
             <div class="empty-mark" aria-hidden="true">P/</div>
@@ -118,9 +123,11 @@ const siteUrlInput = document.querySelector<HTMLInputElement>('#site-url')!
 const loadLatestButton = document.querySelector<HTMLButtonElement>('#load-latest')!
 const downloadPdfButton = document.querySelector<HTMLButtonElement>('#download-pdf')!
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!
+const openFullscreenReaderButton = document.querySelector<HTMLButtonElement>('#open-fullscreen-reader')!
 
 let isLoadingNewest = false
 let chapterRequestId = 0
+let fullscreenCleanup: (() => void) | null = null
 
 function escapeHtml(value: string) {
   return value
@@ -189,6 +196,233 @@ function renderDetails(title: string, pageCount: number) {
 function updatePdfButton() {
   downloadPdfButton.disabled =
     state.isLoadingChapter || state.isExportingPdf || !state.selectedUrl || state.pages.length === 0
+  openFullscreenReaderButton.disabled =
+    state.isLoadingChapter || !state.selectedUrl || state.pages.length === 0
+}
+
+function openFullscreenReader(initialMode: 'vertical' | 'side' = 'vertical') {
+  if (!state.pages.length) return
+
+  if (fullscreenCleanup) {
+    fullscreenCleanup()
+  }
+
+  let mode = initialMode
+  let currentIndex = 0
+  let wheelLocked = false
+  let touchStartX = 0
+  let touchStartY = 0
+  let controlsTimer = 0
+
+  const overlay = document.createElement('div')
+  overlay.className = 'fullscreen-reader'
+  overlay.setAttribute('role', 'dialog')
+  overlay.setAttribute('aria-modal', 'true')
+  overlay.setAttribute('aria-label', 'Fullscreen manga reader')
+  overlay.innerHTML = `
+    <div class="fullscreen-controls" id="fullscreen-controls">
+      <button id="fullscreen-prev" type="button" aria-label="Previous page">←</button>
+      <div class="fullscreen-mode-switch" aria-label="Reading mode">
+        <button id="fullscreen-vertical" type="button" class="${mode === 'vertical' ? 'active' : ''}">Vertical</button>
+        <button id="fullscreen-side" type="button" class="${mode === 'side' ? 'active' : ''}">Side by side</button>
+      </div>
+      <span id="fullscreen-counter" class="fullscreen-counter">1 / ${state.pages.length}</span>
+      <button id="fullscreen-next" type="button" aria-label="Next page">→</button>
+      <button id="fullscreen-close" type="button" aria-label="Exit fullscreen">×</button>
+    </div>
+    <div id="fullscreen-pages" class="fullscreen-pages vertical"></div>
+  `
+
+  document.body.append(overlay)
+  document.body.classList.add('fullscreen-open')
+
+  const pagesElement = overlay.querySelector<HTMLDivElement>('#fullscreen-pages')!
+  const controls = overlay.querySelector<HTMLDivElement>('#fullscreen-controls')!
+  const counter = overlay.querySelector<HTMLSpanElement>('#fullscreen-counter')!
+  const prevButton = overlay.querySelector<HTMLButtonElement>('#fullscreen-prev')!
+  const nextButton = overlay.querySelector<HTMLButtonElement>('#fullscreen-next')!
+  const verticalButton = overlay.querySelector<HTMLButtonElement>('#fullscreen-vertical')!
+  const sideButton = overlay.querySelector<HTMLButtonElement>('#fullscreen-side')!
+  const closeButton = overlay.querySelector<HTMLButtonElement>('#fullscreen-close')!
+
+  function renderMode() {
+    pagesElement.className = `fullscreen-pages ${mode}`
+    pagesElement.innerHTML = ''
+
+    state.pages.forEach((pageUrl, index) => {
+      const page = document.createElement('div')
+      page.className = 'fullscreen-page'
+      page.dataset.index = String(index)
+
+      const image = document.createElement('img')
+      image.src = pageUrl
+      image.alt = `Page ${index + 1}`
+      image.draggable = false
+      page.append(image)
+      pagesElement.append(page)
+    })
+
+    verticalButton.classList.toggle('active', mode === 'vertical')
+    sideButton.classList.toggle('active', mode === 'side')
+    currentIndex = Math.min(currentIndex, state.pages.length - 1)
+    updatePosition(false)
+  }
+
+  function updatePosition(animateTurn: boolean, direction: 1 | -1 = 1) {
+    counter.textContent =
+      mode === 'side'
+        ? `${currentIndex + 1}${currentIndex + 2 <= state.pages.length ? `–${currentIndex + 2}` : ''} / ${state.pages.length}`
+        : `${currentIndex + 1} / ${state.pages.length}`
+
+    prevButton.disabled = currentIndex <= 0
+    nextButton.disabled = currentIndex >= state.pages.length - 1
+
+    if (mode === 'vertical') {
+      const target = pagesElement.querySelector<HTMLElement>(`.fullscreen-page[data-index="${currentIndex}"]`)
+      target?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+
+    const target = pagesElement.querySelector<HTMLElement>(`.fullscreen-page[data-index="${currentIndex}"]`)
+    if (target) {
+      pagesElement.scrollTo({ left: target.offsetLeft, behavior: 'smooth' })
+    }
+
+    if (animateTurn) {
+      target?.classList.remove('turn-next', 'turn-prev')
+      void target?.offsetWidth
+      target?.classList.add(direction === 1 ? 'turn-next' : 'turn-prev')
+    }
+  }
+
+  function goTo(index: number, direction?: 1 | -1) {
+    const bounded = Math.max(0, Math.min(state.pages.length - 1, index))
+    if (bounded === currentIndex) return
+    const resolvedDirection = direction ?? (bounded > currentIndex ? 1 : -1)
+    currentIndex = bounded
+    updatePosition(true, resolvedDirection)
+  }
+
+  function goNext() {
+    goTo(currentIndex + (mode === 'side' ? 2 : 1))
+  }
+
+  function goPrev() {
+    goTo(currentIndex - (mode === 'side' ? 2 : 1))
+  }
+
+  function showControls() {
+    controls.classList.add('visible')
+    window.clearTimeout(controlsTimer)
+    controlsTimer = window.setTimeout(() => controls.classList.remove('visible'), 2200)
+  }
+
+  function exit() {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => undefined)
+    } else if (fullscreenCleanup) {
+      fullscreenCleanup()
+    }
+  }
+
+  const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown' || event.key === 'PageDown') {
+      event.preventDefault()
+      goNext()
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp' || event.key === 'PageUp') {
+      event.preventDefault()
+      goPrev()
+    } else if (event.key === 'Escape') {
+      exit()
+    }
+  }
+
+  const onWheel = (event: WheelEvent) => {
+    event.preventDefault()
+    if (wheelLocked || Math.abs(event.deltaY) + Math.abs(event.deltaX) < 8) return
+    wheelLocked = true
+    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY
+    if (delta > 0) goNext()
+    else goPrev()
+    window.setTimeout(() => { wheelLocked = false }, 550)
+  }
+
+  const onTouchStart = (event: TouchEvent) => {
+    touchStartX = event.changedTouches[0].clientX
+    touchStartY = event.changedTouches[0].clientY
+  }
+
+  const onTouchEnd = (event: TouchEvent) => {
+    const deltaX = event.changedTouches[0].clientX - touchStartX
+    const deltaY = event.changedTouches[0].clientY - touchStartY
+    if (Math.abs(deltaX) > 45 && Math.abs(deltaX) > Math.abs(deltaY)) {
+      if (deltaX < 0) goNext()
+      else goPrev()
+    } else if (mode === 'vertical' && Math.abs(deltaY) > 55) {
+      if (deltaY < 0) goNext()
+      else goPrev()
+    }
+  }
+
+  const onScroll = () => {
+    const pageElements = Array.from(pagesElement.querySelectorAll<HTMLElement>('.fullscreen-page'))
+    let nearestIndex = 0
+    let nearestDistance = Number.POSITIVE_INFINITY
+
+    pageElements.forEach((page, index) => {
+      const distance =
+        mode === 'side'
+          ? Math.abs(page.offsetLeft - pagesElement.scrollLeft)
+          : Math.abs(page.offsetTop - pagesElement.scrollTop)
+      if (distance < nearestDistance) {
+        nearestDistance = distance
+        nearestIndex = index
+      }
+    })
+
+    if (mode === 'side') {
+      const spreadIndex = Math.floor(nearestIndex / 2) * 2
+      currentIndex = Math.max(0, Math.min(state.pages.length - 1, spreadIndex))
+      counter.textContent =
+        `${currentIndex + 1}${currentIndex + 2 <= state.pages.length ? `–${currentIndex + 2}` : ''} / ${state.pages.length}`
+    } else {
+      currentIndex = Math.max(0, Math.min(state.pages.length - 1, nearestIndex))
+      counter.textContent = `${currentIndex + 1} / ${state.pages.length}`
+    }
+  }
+
+  const onFullscreenChange = () => {
+    if (!document.fullscreenElement && fullscreenCleanup) {
+      fullscreenCleanup()
+    }
+  }
+
+  prevButton.addEventListener('click', goPrev)
+  nextButton.addEventListener('click', goNext)
+  closeButton.addEventListener('click', exit)
+  verticalButton.addEventListener('click', () => { mode = 'vertical'; renderMode(); showControls() })
+  sideButton.addEventListener('click', () => { mode = 'side'; renderMode(); showControls() })
+  overlay.addEventListener('mousemove', showControls)
+  overlay.addEventListener('touchstart', onTouchStart, { passive: true })
+  overlay.addEventListener('touchend', onTouchEnd, { passive: true })
+  overlay.addEventListener('wheel', onWheel, { passive: false })
+  pagesElement.addEventListener('scroll', onScroll, { passive: true })
+  document.addEventListener('keydown', onKeyDown)
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+
+  renderMode()
+  showControls()
+
+  void overlay.requestFullscreen?.().catch(() => undefined)
+
+  fullscreenCleanup = () => {
+    document.removeEventListener('keydown', onKeyDown)
+    document.removeEventListener('fullscreenchange', onFullscreenChange)
+    window.clearTimeout(controlsTimer)
+    overlay.remove()
+    document.body.classList.remove('fullscreen-open')
+    fullscreenCleanup = null
+  }
 }
 
 function renderPages() {
@@ -366,6 +600,10 @@ loadLatestButton.addEventListener('click', () => {
 
 downloadPdfButton.addEventListener('click', () => {
   void downloadChapterPdf()
+})
+
+openFullscreenReaderButton.addEventListener('click', () => {
+  openFullscreenReader('side')
 })
 
 siteUrlInput.addEventListener('keydown', (event) => {
