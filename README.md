@@ -19,6 +19,8 @@ backend does not call the frontend service.
 
 Use `vercel dev` from the repository root to run the services together locally.
 
-The API intentionally supports the TCB One Piece source and its image CDN only.
+The API supports the TCB One Piece source and readkagura.com's Kagurabachi
+source, plus their image CDNs. Kagurabachi chapters are loaded at the top of
+the reader index, while the chapter selector can open older chapters directly.
 PDF exports can take time because the function downloads and combines the
 chapter images; Vercel's configured maximum function duration is five minutes.

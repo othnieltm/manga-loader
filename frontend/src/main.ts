@@ -3,6 +3,7 @@ import './style.css'
 type Chapter = {
   title: string
   url: string
+  series?: 'one-piece' | 'kagurabachi'
 }
 
 const API_BASE = ''
@@ -10,18 +11,22 @@ const DEFAULT_SOURCE = 'https://tcbonepiecechapters.com/'
 
 const state: {
   chapters: Chapter[]
+  kagurabachiChapters: Chapter[]
   selectedUrl: string | null
   selectedTitle: string | null
   pages: string[]
   isLoadingChapter: boolean
   isExportingPdf: boolean
+  readerMode: 'side-by-side' | 'vertical'
 } = {
   chapters: [],
+  kagurabachiChapters: [],
   selectedUrl: null,
   selectedTitle: null,
   pages: [],
   isLoadingChapter: false,
   isExportingPdf: false,
+  readerMode: 'vertical',
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')
@@ -72,8 +77,8 @@ app.innerHTML = `
         </div>
       </section>
 
-      <section class="layout" aria-label="Chapter archive and reader">
-        <aside class="sidebar panel">
+      <section id="archive-layout" class="layout" aria-label="Chapter archive and reader">
+        <aside id="chapter-index" class="sidebar panel">
           <div class="panel-header">
             <div>
               <p class="section-kicker">01 / THE INDEX</p>
@@ -81,6 +86,15 @@ app.innerHTML = `
             </div>
             <span id="chapter-count" class="count-pill">0</span>
           </div>
+          <form id="chapter-lookup" class="chapter-lookup">
+            <label for="chapter-number">READ A CHAPTER</label>
+            <div class="chapter-lookup-row">
+              <select id="chapter-number" name="chapter" disabled>
+                <option value="">Load chapters first</option>
+              </select>
+            </div>
+            <p id="chapter-lookup-status" class="chapter-lookup-status" role="status" aria-live="polite"></p>
+          </form>
           <ul id="chapter-list" class="chapter-list"></ul>
           <div class="sidebar-foot">
             <span class="status-dot" aria-hidden="true"></span>
@@ -90,12 +104,26 @@ app.innerHTML = `
 
         <section class="reader panel" aria-label="Selected chapter">
           <div class="reader-heading">
-            <p class="section-kicker">02 / THE READER</p>
-            <div class="reader-heading-actions">
-              <span class="reader-note">SCROLL TO EXPLORE <span aria-hidden="true">↓</span></span>
+            <div class="reader-title">
+              <button id="index-toggle" class="index-toggle" type="button" aria-controls="chapter-index" aria-expanded="true">
+                <span class="hamburger-icon" aria-hidden="true"><span></span><span></span><span></span></span>
+                <span>Index</span>
+              </button>
+              <p class="section-kicker">02 / THE READER</p>
+            </div>
+            <div class="reader-tools">
               <button id="open-fullscreen-reader" class="fullscreen-reader-button" type="button" disabled>
                 Fullscreen
               </button>
+              <span class="reader-mode-label">READER MODE</span>
+              <div class="reader-mode-control" role="group" aria-label="Reader mode">
+                <button class="reader-mode-button" type="button" data-reader-mode="side-by-side" aria-pressed="false">
+                  Side by side
+                </button>
+                <button class="reader-mode-button active" type="button" data-reader-mode="vertical" aria-pressed="true">
+                  Vertical stream
+                </button>
+              </div>
             </div>
           </div>
           <div id="chapter-details" class="chapter-details empty">
@@ -124,9 +152,16 @@ const loadLatestButton = document.querySelector<HTMLButtonElement>('#load-latest
 const downloadPdfButton = document.querySelector<HTMLButtonElement>('#download-pdf')!
 const exportStatus = document.querySelector<HTMLParagraphElement>('#export-status')!
 const openFullscreenReaderButton = document.querySelector<HTMLButtonElement>('#open-fullscreen-reader')!
+const readerModeButtons = document.querySelectorAll<HTMLButtonElement>('[data-reader-mode]')
+const archiveLayout = document.querySelector<HTMLElement>('#archive-layout')!
+const indexToggle = document.querySelector<HTMLButtonElement>('#index-toggle')!
+const chapterLookup = document.querySelector<HTMLFormElement>('#chapter-lookup')!
+const chapterNumberInput = document.querySelector<HTMLSelectElement>('#chapter-number')!
+const chapterLookupStatus = document.querySelector<HTMLParagraphElement>('#chapter-lookup-status')!
 
 let isLoadingNewest = false
 let chapterRequestId = 0
+let isIndexCollapsed = false
 let fullscreenCleanup: (() => void) | null = null
 
 function escapeHtml(value: string) {
@@ -150,6 +185,48 @@ async function fetchJson<T>(path: string): Promise<T> {
   }
 
   return (await response.json()) as T
+}
+
+function getChapterNumber(chapter: Chapter) {
+  const match = chapter.url.match(/chapter-(\d+(?:\.\d+)?)(?:-|\/|$)/i)
+  return match?.[1] ?? ''
+}
+
+function getChapterLabel(chapter: Chapter) {
+  const number = getChapterNumber(chapter)
+  return number ? `Chapter ${number}` : chapter.title
+}
+
+function renderChapterSelector(selectedChapter: Chapter | undefined) {
+  const isKagurabachi = selectedChapter?.series === 'kagurabachi'
+  const latestOnePieceChapter = state.chapters.find((chapter) => chapter.series === 'one-piece')
+  const latestNumber = latestOnePieceChapter ? Number(getChapterNumber(latestOnePieceChapter)) : 0
+  chapterNumberInput.innerHTML = '<option value="">Select a chapter</option>'
+  chapterNumberInput.disabled = isKagurabachi
+    ? state.kagurabachiChapters.length === 0
+    : latestNumber < 1
+
+  if (isKagurabachi) {
+    for (const chapter of state.kagurabachiChapters) {
+      const option = document.createElement('option')
+      option.value = chapter.url
+      option.textContent = getChapterLabel(chapter)
+      chapterNumberInput.append(option)
+    }
+    return
+  }
+
+  if (latestNumber < 1) {
+    chapterNumberInput.innerHTML = '<option value="">No chapters available</option>'
+    return
+  }
+
+  for (let number = latestNumber; number >= 1; number -= 1) {
+    const option = document.createElement('option')
+    option.value = String(number)
+    option.textContent = `Chapter ${number}`
+    chapterNumberInput.append(option)
+  }
 }
 
 function renderChapterList() {
@@ -427,6 +504,7 @@ function openFullscreenReader(initialMode: 'vertical' | 'side' = 'vertical') {
 
 function renderPages() {
   pageGrid.innerHTML = ''
+  pageGrid.className = `page-grid mode-${state.readerMode}`
 
   if (!state.pages.length) {
     pageGrid.innerHTML = '<p class="empty-pages">No pages available.</p>'
@@ -468,6 +546,16 @@ function renderPages() {
   }
 }
 
+function setReaderMode(mode: 'side-by-side' | 'vertical') {
+  state.readerMode = mode
+  readerModeButtons.forEach((button) => {
+    const isActive = button.dataset.readerMode === mode
+    button.classList.toggle('active', isActive)
+    button.setAttribute('aria-pressed', String(isActive))
+  })
+  renderPages()
+}
+
 async function loadLatestChapters() {
   const site = siteUrlInput.value.trim() || DEFAULT_SOURCE
 
@@ -482,11 +570,28 @@ async function loadLatestChapters() {
 
   try {
     const payload = await fetchJson<{ chapters: Chapter[]; source: string }>(`/api/latest?site=${encodeURIComponent(site)}`)
-    state.chapters = payload.chapters
-    state.selectedUrl = payload.chapters[0]?.url ?? null
+    let kagurabachiChapters: Chapter[] = []
+    try {
+      const kaguraPayload = await fetchJson<{ chapters: Chapter[]; source: string }>('/api/kagurabachi')
+      kagurabachiChapters = kaguraPayload.chapters.map((chapter) => ({ ...chapter, series: 'kagurabachi' }))
+    } catch (error) {
+      chapterLookupStatus.textContent = `Kagurabachi unavailable: ${(error as Error).message || 'Unable to load chapters.'}`
+      chapterLookupStatus.className = 'chapter-lookup-status error-message'
+    }
+
+    const onePieceChapters = payload.chapters.map((chapter) => ({ ...chapter, series: 'one-piece' as const }))
+    state.kagurabachiChapters = kagurabachiChapters
+    const kagurabachiEntry = kagurabachiChapters[0]
+      ? { ...kagurabachiChapters[0], title: 'Kagurabachi' }
+      : null
+    state.chapters = kagurabachiEntry
+      ? [kagurabachiEntry, ...onePieceChapters]
+      : onePieceChapters
+    state.selectedUrl = state.chapters[0]?.url ?? null
+    renderChapterSelector(state.chapters[0])
 
     if (state.chapters.length) {
-      await selectChapter(state.chapters[0])
+      await selectChapter(state.chapters[0], true)
     } else {
       chapterRequestId += 1
       state.selectedUrl = null
@@ -495,6 +600,7 @@ async function loadLatestChapters() {
       chapterDetails.classList.add('empty')
       chapterDetails.innerHTML = '<p>No chapters were found for this source.</p>'
       state.pages = []
+      renderChapterSelector(undefined)
       updatePdfButton()
       renderPages()
     }
@@ -505,10 +611,12 @@ async function loadLatestChapters() {
     chapterDetails.classList.add('empty')
     chapterDetails.innerHTML = `<p>${escapeHtml((error as Error).message || 'Unable to load chapters.')}</p>`
     state.chapters = []
+    state.kagurabachiChapters = []
     state.selectedUrl = null
     state.selectedTitle = null
     state.isLoadingChapter = false
     state.pages = []
+    renderChapterSelector(undefined)
     updatePdfButton()
     renderPages()
     renderChapterList()
@@ -519,10 +627,16 @@ async function loadLatestChapters() {
   }
 }
 
-async function selectChapter(chapter: Chapter) {
+async function selectChapter(chapter: Chapter, updateSelector = true) {
   const requestId = ++chapterRequestId
   state.selectedUrl = chapter.url
   state.selectedTitle = chapter.title
+  if (updateSelector) {
+    renderChapterSelector(chapter)
+    chapterNumberInput.value = chapter.series === 'kagurabachi'
+      ? chapter.url
+      : getChapterNumber(chapter)
+  }
   state.pages = []
   state.isLoadingChapter = true
   exportStatus.textContent = ''
@@ -548,6 +662,22 @@ async function selectChapter(chapter: Chapter) {
     chapterDetails.innerHTML += `<p class="error-message">${escapeHtml((error as Error).message || 'Unable to load pages.')}</p>`
     renderPages()
     updatePdfButton()
+  }
+}
+
+async function lookupChapter(number: string) {
+  chapterLookupStatus.textContent = 'Finding chapter...'
+  chapterLookupStatus.className = 'chapter-lookup-status'
+
+  try {
+    const payload = await fetchJson<{ chapter: Chapter }>(
+      `/api/chapter-lookup?number=${encodeURIComponent(number)}`,
+    )
+    chapterLookupStatus.textContent = ''
+    await selectChapter(payload.chapter)
+  } catch (error) {
+    chapterLookupStatus.textContent = (error as Error).message || 'Unable to find that chapter.'
+    chapterLookupStatus.className = 'chapter-lookup-status error-message'
   }
 }
 
@@ -603,13 +733,45 @@ downloadPdfButton.addEventListener('click', () => {
 })
 
 openFullscreenReaderButton.addEventListener('click', () => {
-  openFullscreenReader('side')
+  openFullscreenReader(state.readerMode === 'side-by-side' ? 'side' : 'vertical')
+})
+
+indexToggle.addEventListener('click', () => {
+  isIndexCollapsed = !isIndexCollapsed
+  archiveLayout.classList.toggle('index-collapsed', isIndexCollapsed)
+  indexToggle.setAttribute('aria-expanded', String(!isIndexCollapsed))
+  indexToggle.setAttribute('aria-label', `${isIndexCollapsed ? 'Show' : 'Hide'} chapter index`)
+})
+
+readerModeButtons.forEach((button) => {
+  button.addEventListener('click', () => {
+    const mode = button.dataset.readerMode
+    if (mode === 'side-by-side' || mode === 'vertical') {
+      setReaderMode(mode)
+    }
+  })
 })
 
 siteUrlInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault()
     void loadLatestChapters()
+  }
+})
+
+chapterLookup.addEventListener('submit', (event) => {
+  event.preventDefault()
+  if (chapterNumberInput.value) {
+    chapterNumberInput.dispatchEvent(new Event('change'))
+  }
+})
+
+chapterNumberInput.addEventListener('change', () => {
+  if (chapterNumberInput.value.startsWith('https://readkagura.com/')) {
+    const chapter = state.kagurabachiChapters.find((item) => item.url === chapterNumberInput.value)
+    if (chapter) void selectChapter(chapter, false)
+  } else if (chapterNumberInput.value) {
+    void lookupChapter(chapterNumberInput.value)
   }
 })
 
