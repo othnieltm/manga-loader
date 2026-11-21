@@ -189,19 +189,30 @@ async function findMangaChapter(number) {
 
 function parseChapterPages(html) {
   const matches = [...html.matchAll(/https?:\/\/[^\s"'<>]+/gi)];
-  const pages = matches
-    .map((match) => match[0])
-    .filter((page) => {
-      try {
-        const url = new URL(page);
-        return IMAGE_HOSTS.has(url.hostname) &&
-          /\.(?:png|jpe?g|webp)(?:[?#]|$)/i.test(url.pathname);
-      } catch {
-        return false;
-      }
-    });
+  const pagesByIdentity = new Map();
 
-  return [...new Set(pages)];
+  for (const match of matches) {
+    try {
+      const url = new URL(match[0]);
+      if (!IMAGE_HOSTS.has(url.hostname) ||
+        !/\.(?:png|jpe?g|webp)(?:[?#]|$)/i.test(url.pathname)) {
+        continue;
+      }
+
+      const normalizedPath = url.hostname === 'blogger.googleusercontent.com'
+        ? url.pathname.replace(/\/s\d+(?:-[^/]*)?\//i, '/')
+        : url.pathname;
+      const identity = `${url.hostname}${normalizedPath}`;
+
+      if (!pagesByIdentity.has(identity)) {
+        pagesByIdentity.set(identity, url.toString());
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return [...pagesByIdentity.values()];
 }
 
 function jsonResponse(res, payload, statusCode = 200) {

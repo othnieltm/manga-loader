@@ -75,6 +75,14 @@ test('validates chapter numbers and parses manga archive entries', () => {
   assert.deepEqual(parseChapterPages(
     '<img src="https://blogger.googleusercontent.com/img/a/001.jpg"><img src="https://example.test/logo.png">',
   ), ['https://blogger.googleusercontent.com/img/a/001.jpg']);
+  assert.deepEqual(parseChapterPages(
+    '<img src="https://blogger.googleusercontent.com/img/b/hash/s1600/001.jpg">' +
+    '<img src="https://blogger.googleusercontent.com/img/b/hash/s1145/001.jpg">' +
+    '<img src="https://blogger.googleusercontent.com/img/b/hash/s1145/002.jpg">',
+  ), [
+    'https://blogger.googleusercontent.com/img/b/hash/s1600/001.jpg',
+    'https://blogger.googleusercontent.com/img/b/hash/s1145/002.jpg',
+  ]);
 });
 
 test('rejects unsupported latest and chapter URLs without fetching', async () => {
